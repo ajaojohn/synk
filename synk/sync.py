@@ -5,7 +5,7 @@ import filecmp
 import subprocess
 from datetime import datetime
 from synk.utils import confirm, print_error, print_success, print_warning
-
+import tempfile
 
 def sync_all(cfg, profile_name):
     plan = plan_syncs(cfg, profile_name)
@@ -81,18 +81,65 @@ def show_plan(plan):
     print(f"\nTotal changes to apply: {total}")
 
 def apply_plan(plan):
-    for item in plan:
-        if item["type"] not in ["new", "modified"]:
-            continue
+    """
+    Apply the planned syncs, with rollback on failure.
+    """
+    backups = []      # list of (original_path, backup_path)
+    staged_files = [] # list of paths added to git
 
-        try:
-            shutil.copy2(item["source"], item["destination"])
-            subprocess.run(["git", "add", item["destination"]],
-                            cwd=item["git_repo"], check=True,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            print_success(f"Synced: {item['source']} -> {item['destination']}")
-        except Exception as e:
-            print_error(f"Failed to sync {item['source']} -> {item['destination']}:\n{e}")
+    try:
+        for item in plan:
+            if item["type"] not in ["new", "modified"]:
+                continue
+
+            src = item["source"]
+            dst = item["destination"]
+            repo = item["git_repo"]
+
+            # Backup existing file if it exists
+            backup_path = None
+            if os.path.exists(dst):
+                fd, backup_path = tempfile.mkstemp()
+                os.close(fd)  # close the open file descriptor
+                shutil.copy2(dst, backup_path)
+                backups.append( (dst, backup_path) )
+
+            # Copy new contents
+            shutil.copy2(src, dst)
+
+            # Stage in git
+            subprocess.run(
+                ["git", "add", dst],
+                cwd=repo, check=True,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+            staged_files.append( (repo, dst) )
+
+            print_success(f"Synced: {src} -> {dst}")
+
+    except Exception as e:
+        print_error(f"Error during sync: {e}")
+        print_warning("Rolling back changes...")
+
+        # Restore backups
+        for orig, backup in backups:
+            shutil.copy2(backup, orig)
+            print_warning(f"Restored original: {orig}")
+
+        # Unstage any files that were staged
+        for repo, staged in staged_files:
+            try:
+                subprocess.run(
+                    ["git", "restore", "--staged", staged],
+                    cwd=repo, check=True,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+                print_warning(f"Unstaged from git: {staged}")
+            except Exception as unstaging_error:
+                print_error(f"Failed to unstage {staged}: {unstaging_error}")
+
+        print_error("Sync aborted with rollback.")
+        raise
 
 def commit_changes(plan, commit_message=None):
     # get unique repos in the plan
