@@ -1,13 +1,4 @@
 {
   "settings": {},
-  "profiles": {
-    "devfiles": {
-      "syncs": [
-        {
-          "source_file": "/Users/johnajao/.aerospace.toml",
-          "destination_repo_file": "/Users/johnajao/devfiles/dotfiles/.aerospace.toml"
-        }
-      ]
-    }
-  }
+  "profiles": {}
 }
